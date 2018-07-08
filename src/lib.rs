@@ -6,11 +6,11 @@ extern crate subprocess;
 use subprocess::{Exec, PopenError, Redirection};
 
 pub struct Notmuch {
-    basecommand: String,
-    command: NotmuchCommand,
-    output: NotmuchOutputType,
-    args: Vec<String>,
-    caller_args: Option<Vec<String>>,
+    pub basecommand: String,
+    pub command: NotmuchCommand,
+    pub output: NotmuchOutputType,
+    pub args: Vec<String>,
+    pub caller_args: Option<Vec<String>>,
 }
 
 pub enum NotmuchCommand {
@@ -19,15 +19,21 @@ pub enum NotmuchCommand {
 
 #[derive(Debug)]
 pub enum NotmuchOutput {
+    Messages(Vec<MessageData>),
     Summary(Vec<SummaryData>),
+    Threads(Vec<ThreadData>),
 }
 pub enum NotmuchOutputType {
-    Summary
+    // Files,
+    Messages,
+    Summary,
+    // Tags,
+    Threads,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SummaryData {
-    thread: String,
+    thread: ThreadData,
     timestamp: usize,
     date_relative: String,
     matched: usize,
@@ -35,20 +41,24 @@ pub struct SummaryData {
     authors: String,
     subject: String,
     tags: Vec<String>,
-    query: Vec<Option<String>>,
+    query: Vec<Option<MessageData>>,
 }
+type ThreadData = String;
+type MessageData = String;
 
 impl Notmuch {
     pub fn new(command: NotmuchCommand, output: NotmuchOutputType) -> Notmuch {
         let subcommand = match command {
             NotmuchCommand::Search => "search",
-            _ => "search",
+            // _ => "search",
         };
         let output_format = format!(
             "--output={}",
             match output {
+                NotmuchOutputType::Messages => "messages",
                 NotmuchOutputType::Summary => "summary",
-                _ => "summary",
+                NotmuchOutputType::Threads => "threads",
+                // _ => "summary",
             }
         );
 
@@ -69,26 +79,40 @@ impl Notmuch {
         if self.caller_args.is_none() {
             self.caller_args = Some(vec![arg.to_owned()])
         } else {
-            if let Some(ref mut args) = self.caller_args.as_mut() {
-                args.push(arg.to_owned());
+            if let Some(ref mut existing_args) = self.caller_args.as_mut() {
+                existing_args.push(arg.to_owned());
             }
         }
         self
     }
 
     pub fn exec(&mut self) -> Result<NotmuchOutput, PopenError> {
-        if let Some(ref mut args) = self.caller_args.as_mut() {
-            self.args.append(args)
+        if let Some(ref mut caller_args) = self.caller_args.as_mut() {
+            // combine the default arguments with arguments provided
+            // by the caller
+            self.args.append(caller_args)
         }
-        let cmd = Exec::cmd(&self.basecommand)
-            .args(&self.args);
+        let cmd = Exec::cmd(&self.basecommand).args(&self.args);
 
         match cmd.stdout(Redirection::Pipe).capture() {
-            Ok(cmd_out) => {
-                let threads: Vec<SummaryData> = serde_json::from_str(&cmd_out.stdout_str()).unwrap();
-                Ok(NotmuchOutput::Summary(threads))
+            Ok(cmd_out) => match self.output {
+                NotmuchOutputType::Messages => {
+                    let messages: Vec<MessageData> =
+                        serde_json::from_str(&cmd_out.stdout_str()).unwrap();
+                    return Ok(NotmuchOutput::Messages(messages));
+                }
+                NotmuchOutputType::Summary => {
+                    let summaries: Vec<SummaryData> =
+                        serde_json::from_str(&cmd_out.stdout_str()).unwrap();
+                    return Ok(NotmuchOutput::Summary(summaries));
+                }
+                NotmuchOutputType::Threads => {
+                    let threads: Vec<ThreadData> =
+                        serde_json::from_str(&cmd_out.stdout_str()).unwrap();
+                    return Ok(NotmuchOutput::Threads(threads));
+                }
             },
-            Err(cmd_out) => Err(cmd_out)
+            Err(cmd_out) => return Err(cmd_out),
         }
     }
 }
